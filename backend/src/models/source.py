@@ -9,10 +9,13 @@ class Dataset(Base):
     __table_args__ = (UniqueConstraint('name', 'checksum'),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120))
+    name: Mapped[str] = mapped_column(String(120), index=True)
     filename: Mapped[str] = mapped_column(String(160))
     checksum: Mapped[str] = mapped_column(String(64))
     rows: Mapped[list] = mapped_column(JSON)
     row_count: Mapped[int]
+    version: Mapped[int] = mapped_column(default=1)
+    current: Mapped[bool] = mapped_column(default=True, index=True)
+    replaces_id: Mapped[int | None] = mapped_column(default=None)
     author: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(default=now)

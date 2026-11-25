@@ -7,8 +7,8 @@ def validate_rows(rows):
         validator(rows)
 
 
-def analyze(rows, params):
-    raw = analysis.analyze(rows, params)
+def analyze(rows, params, pinned=None):
+    raw = analysis.analyze(rows, params, pinned)
     tables = []
     for item in raw['tables']:
         columns = [{'key': str(i), 'label': label} for i, label in enumerate(item['columns'])]
@@ -21,4 +21,5 @@ def analyze(rows, params):
         'metrics': raw['metrics'], 'tables': tables,
         'charts': [{'kind': 'bar', 'title': raw.get('series_title', '业务指标对比'), 'series': series}] if series else [],
         'ready': raw.get('ready', True),
+        'range': raw.get('range'), 'extremes': raw.get('extremes'), 'selection': raw.get('selection'),
     }

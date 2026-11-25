@@ -30,6 +30,7 @@ class Run(Base):
     status: Mapped[str] = mapped_column(String(20), default=Status.QUEUED, index=True)
     params: Mapped[dict] = mapped_column(JSON)
     result: Mapped[dict | None] = mapped_column(JSON)
+    pinned: Mapped[list | None] = mapped_column(JSON, default=None)
     error: Mapped[str | None] = mapped_column(String(500))
     export_file: Mapped[str | None] = mapped_column(String(100))
     review: Mapped[str] = mapped_column(String(20), default=Review.PENDING)
@@ -37,6 +38,7 @@ class Run(Base):
     decision: Mapped[str | None] = mapped_column(String(120))
     attempt: Mapped[int] = mapped_column(default=0)
     lease_until: Mapped[datetime | None]
+    superseded_by: Mapped[int | None] = mapped_column(default=None)
     author: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(default=now)
     finished_at: Mapped[datetime | None]

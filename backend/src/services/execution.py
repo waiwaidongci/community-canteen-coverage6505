@@ -7,6 +7,7 @@ from src.domain.analysis import analyze
 from src.domain.spec import SPEC
 from src.models.jobs import Delivery, Run, Schedule
 from src.models.source import Dataset
+from src.services import eligibility
 from src.services.audit import record
 from src.utils.exports import write_report
 from src.utils.time import now
@@ -21,6 +22,7 @@ def materialize_due():
     with Session.begin() as db:
         schedules = db.scalars(select(Schedule).where(Schedule.enabled.is_(True), Schedule.next_at <= stamp)
                                 .order_by(Schedule.next_at).limit(20).with_for_update(skip_locked=True))
+        delivered = eligibility.delivered_ids(db)
         for item in schedules:
             due = item.next_at
             dataset_id = item.dataset_id
@@ -33,12 +35,16 @@ def materialize_due():
                     report_day = date.fromisoformat(params[period_key]) + timedelta(days=elapsed_days)
                     params[period_key] = report_day.isoformat()
                     item.params = {**params, period_key: (report_day + timedelta(days=1)).isoformat()}
-                    dataset_id = db.scalar(select(Dataset.id).order_by(Dataset.id.desc()).limit(1)) or dataset_id
+                    dataset_id = db.scalar(select(Dataset.id).where(Dataset.current.is_(True))
+                                            .order_by(Dataset.id.desc()).limit(1)) or dataset_id
                 item.next_at = due + timedelta(days=1)
             else:
                 item.enabled = False
-            db.add(Run(dataset_id=dataset_id, schedule_id=item.id, scheduled_at=due,
-                       name=item.name, params=params, author=item.author))
+            run = Run(dataset_id=dataset_id, schedule_id=item.id, scheduled_at=due,
+                      name=item.name, params=params, author=item.author)
+            db.add(run)
+            db.flush()
+            eligibility.supersede_previous(db, run, delivered)
 
 
 def claim():
@@ -59,14 +65,14 @@ def claim():
         job.attempt += 1
         job.lease_until = stamp + timedelta(minutes=3)
         records = db.get(Dataset, job.dataset_id).rows
-        return job.id, job.attempt, records, job.params
+        return job.id, job.attempt, records, job.params, job.pinned
 
 
 def execute(lease):
-    job_id, attempt, rows, params = lease
+    job_id, attempt, rows, params, pinned = lease
     result = export = failure = None
     try:
-        result = analyze(rows, params)
+        result = analyze(rows, params, pinned)
         export = write_report(job_id, attempt, result)
     except ValueError as error:
         failure = str(error)[:500]
@@ -86,8 +92,13 @@ def execute(lease):
         record(db, 'worker', f'analysis.{job.status}', job.id, attempt=attempt, reason=failure)
         if job.schedule_id:
             plan = db.get(Schedule, job.schedule_id)
-            ready = not failure and result.get('ready', True)
-            detail = '已保存 CSV 到站内收件箱' if ready else (failure or result['headline'])
-            receipt = Delivery(run_id=job.id, recipient=plan.recipient, state='delivered' if ready else 'blocked', detail=detail[:500])
+            allowed = not failure and eligibility.can_distribute(db, job)
+            detail = '已保存 CSV 到站内收件箱' if allowed else (failure or (job.result or {}).get('headline')
+                                                              or eligibility.state(db, job)['reason'])
+            if allowed:
+                # Pin the meal selection that entered this report so later recomputes reproduce it.
+                job.pinned = job.result.get('selection')
+            receipt = Delivery(run_id=job.id, recipient=plan.recipient,
+                               state='delivered' if allowed else 'blocked', detail=detail[:500])
             db.add(receipt)
             record(db, 'worker', f'delivery.{receipt.state}', job.id, recipient=plan.recipient)
